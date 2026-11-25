@@ -163,5 +163,33 @@ These are pipeline- and texture-side, separate from the frame-rate work.
 
 ---
 
+## Repository layout
+
+```
+README.md                     status, measurements, defects, next
+patches/                      our changes to DexNom/VIctory, as git patches
+  0001-victory-gpu-host-copy-inplace.patch   copy shadow refreshes in place (host.rs)
+  0002-victory-hle-window-size.patch         VICTORY_WINDOW override (lifecycle.rs)
+config/                       the exact switches and commands
+  env.ps1                     every VICTORY_* a run uses
+  warm.ps1                    shader warm (victory.exe warm, not victory-warm.exe)
+  launch.ps1                  launch
+  victory.toml                path config
+scripts/                      log readers - UTF-16/ANSI safe, shared access on a live log
+  dex_frame.py                last frame lines + copies rate in GB/s
+  dex_probe.py                copystat, copy-back checks, pipeline lines
+  dex_log4.py                 last frame lines, fields split
+  tail_log.py                 tail with records rejoined
+  run_summary.py              one run condensed
+docs/
+  copyback-attribution.md     where the 2 s frames went in the older tree, commit by commit
+```
+
+Nothing in this repository is a game file. The title, its archives and its shader
+containers stay where they are installed. This is the runtime work around them: patches,
+switches, readers, and the numbers they produced.
+
+---
 *Unofficial. Not affiliated with Rockstar Games or Take-Two. No game files are
 distributed here - only measurements, patches and notes against an open-source runtime.*
+

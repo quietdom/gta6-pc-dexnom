@@ -1,0 +1,70 @@
+diff --git a/crates/victory-gpu/src/host.rs b/crates/victory-gpu/src/host.rs
+index 2441674..b32a6eb 100644
+--- a/crates/victory-gpu/src/host.rs
++++ b/crates/victory-gpu/src/host.rs
+@@ -6249,15 +6249,27 @@ impl Batch {
+     }
+ }
+ 
++/// Whether a copy whose every source page is there is made in place instead
++/// of through the kernel (`VICTORY_COPY_PLAIN=0` turns it off, back to the
++/// kernel's read for every copy).
++fn plain_copies() -> bool {
++    static ON: OnceLock<bool> = OnceLock::new();
++    *ON.get_or_init(|| {
++        !std::env::var_os("VICTORY_COPY_PLAIN").is_some_and(|v| v == "0")
++    })
++}
++
+ /// Copies title memory at submission. The ranges were checked against their
+ /// resources when recorded, but the title may since have unmapped pages of
+ /// them (tiled memory, page mappings), which read as zeros here; a title
+ /// destination (`title_dst`) that is not all mapped is left alone.
+ ///
+-/// The source is read through the kernel (`ReadProcessMemory`), which
+-/// reports an unmapped page instead of faulting. Asking `VirtualQuery` first
+-/// cost about 2 ms per copy in the title's big pools (it walks the page
+-/// tables to the region's end), which made copies run at 100-200 MB/s.
++/// A source whose pages are all there is copied in place; a source with
++/// holes is read through the kernel (`ReadProcessMemory`), which reports an
++/// unmapped page instead of faulting. Asking `VirtualQuery` first cost about
++/// 2 ms per copy in the title's big pools (it walks the page tables to the
++/// region's end), which made copies run at 100-200 MB/s; the working-set
++/// question `texture::committed` asks is one call per 256 pages.
+ pub(crate) fn copy_mapped(dst: *mut u8, src: *const u8, len: usize, title_dst: bool) {
+     #[cfg(feature = "diagnostics")]
+     match crate::copystat::mode() {
+@@ -6289,6 +6301,33 @@ pub(crate) fn copy_mapped(dst: *mut u8, src: *const u8, len: usize, title_dst: b
+         // The kernel writes the destination: it must not be guarded.
+         crate::watch::writing(dst as usize, len);
+     }
++    // Pages that are all there are copied in place. Same bytes the kernel
++    // would move, at 8 GB/s instead of the kernel's 2.4 GB/s (run 3: 229.5 MB
++    // in 96.2 ms). The pin holds the range, so `committed`'s answer stays
++    // true until the copy is done and the title cannot remap under it; the
++    // question itself is one call per 256 pages, not a page-table walk.
++    // `title_memory_reading_now` never blocks - if a mapping is changing, the
++    // kernel's read below stands as before. `VICTORY_COPY_PLAIN=0` turns the
++    // in-place path off.
++    if !title_dst
++        && plain_copies()
++        && let Some(_mapped) =
++            crate::watch::title_memory_reading_now(src as usize..src as usize + len)
++        && crate::texture::committed(src, len)
++    {
++        #[cfg(feature = "diagnostics")]
++        let plain = std::time::Instant::now();
++        // SAFETY: the guard reports every source page readable and holds the
++        // range; the destination is host memory the caller owns, or title
++        // memory whose write guard was taken above.
++        unsafe { std::ptr::copy_nonoverlapping(src, dst, len) };
++        #[cfg(feature = "diagnostics")]
++        crate::copystat::add(
++            crate::copystat::C::MoveUs,
++            plain.elapsed().as_micros() as u64,
++        );
++        return;
++    }
+     #[cfg(feature = "diagnostics")]
+     let moved = std::time::Instant::now();
+     let whole = read(src, dst, len);
