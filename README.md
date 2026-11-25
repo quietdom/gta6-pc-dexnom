@@ -139,7 +139,48 @@ Rendering is correct enough to play but not complete.
   or format mix-up on one texture format rather than a lighting problem.
 - **Dropped draws, 353-3 287 per frame**, all with no host pipeline.
 
-These are pipeline- and texture-side, separate from the frame-rate work.
+These are pipeline- and texture-side, separate from the frame-rate work. All four have a
+change on upstream `main` - see **Landed upstream** below.
+
+---
+
+## Landed upstream (cold-project-vi main)
+
+Source changes live in **https://github.com/felicienradio/cold-project-vi**, branch `main`,
+commits go straight to `main`. The three below are ports into the tree this log runs
+(`C:\GTA6\dex`). All three pass `cargo check -p victory-gpu`.
+
+None of them has been measured on a run yet. Every figure under Measurements predates them.
+
+| commit | title | defect it targets | knob |
+|---|---|---|---|
+| `7103c75` | `shader: name the SGPR behind 'a hardware SGPR input'` | A translator refusal printed one generic string, so a refused shader could not be traced to the input that caused it. The message now names the SGPR. | none |
+| `0f06d8a` | `gpu: a failed pipeline gets another attempt` | Host pipeline creation was cached in a `OnceLock`, so one failed PSO stayed failed for the rest of the run. That is the `0 being made` in the frame line, and the permanent `dropped N without a host pipeline`. | `VICTORY_PIPELINE_RETRY_FRAMES`, default `300` frames |
+| `e321a74` | `gpu: a slot whose pages are away keeps its host copy for a while` | A texture slot whose pages were unmapped lost its host copy immediately and bound null, so a streaming texture sampled nothing for that frame. This is the untextured arms/hands and the red NPC. | `VICTORY_TEXTURE_KEEP_MS`, default `2000` ms |
+
+### `0f06d8a` - pipeline retry
+
+`made` is a `OnceLock<HostPipeline>`; `failed_frame` and `failures` record the last attempt
+and the attempt count. `due()` decides whether this frame owes a retry and `retry_frames()`
+reads `VICTORY_PIPELINE_RETRY_FRAMES`. On failure `queue_state` returns to `NOT_QUEUED` so
+the next due frame asks again, and `missing()` reports `N attempts` instead of `0 being made`.
+
+A failed PSO is retried once its last attempt is `VICTORY_PIPELINE_RETRY_FRAMES` old, so a
+pipeline that will never build costs one attempt every 300 frames instead of one attempt for
+the whole run.
+
+### `e321a74` - texture slots that are away
+
+`Waiting.mapped_at` stamps the frame a slot's pages went away, `TextureQueue::away()` reports
+how long they have been gone, and `HostHeap::texture_slot_away()` exposes that to the draw
+pass. The pass keeps the host copy for `VICTORY_TEXTURE_KEEP_MS` before letting the slot go,
+so the sampling bind still has bytes behind it in the frame the pages are missing.
+
+New frame-line fields next to the drop counters:
+
+```
+passed over unmapped (N kept their host copy, M let go)
+```
 
 ---
 
@@ -149,7 +190,12 @@ These are pipeline- and texture-side, separate from the frame-rate work.
    shadow copy. Targets the 2.4 s heap pass at the source.
 2. Copy-back: 127 ms for 60 MB is 470 MB/s; find where it is spent.
 3. Drop the window to 640x360 (44% fewer pixels than 854x480) once the CPU side is fixed.
-4. Pipeline drops: find why `0 being made` when draws are refused.
+4. Pipeline drops: the next run measures `0f06d8a`. The drop trace should carry `N attempts`
+   where it carried `0 being made`; the dropped-draw count (353-3 287 per frame) is the
+   figure to compare against.
+5. Texture sampling: the next run measures `e321a74`. The frame line should carry
+   `passed over unmapped (N kept their host copy, M let go)`, and the red-face and
+   untextured-arms defects are checked against it - reduced or not.
 
 ---
 
